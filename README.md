@@ -19,11 +19,11 @@
 # References
 
   - How to use `DistributedSampler`
-    <https://discuss.pytorch.org/t/distributedsampler-for-validation-set-in-imagenet-example/35273>
+    <https://discuss.pytorch.org/t/distributedsampler-for-validation-set-in-imagenet-example/35273> \
     <https://pytorch.org/docs/stable/data.html?highlight=distributedsampler#torch.utils.data.distributed.DistributedSampler>
   - How to use `DistributedDataParallel`
     <https://yangkky.github.io/2019/07/08/distributed-pytorch-tutorial.html>
-  - How to use `
+  - How to get summaries of metrics
     <https://github.com/leo-mao/dist-mnist/blob/tensorflow-tutorial-amended/torch-dist/mnist-dist.py>
   - EfficientNet model code
     <https://github.com/lukemelas/EfficientNet-PyTorch>
