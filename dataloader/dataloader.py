@@ -13,7 +13,9 @@ def imagenet_loader(
         is_distributed: bool,
         dataset_dir: str,
         batch_size: int,
-        num_workers: int):
+        num_workers: int,
+        num_replicas: int = None,
+        rank: int = None):
 
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
@@ -38,7 +40,10 @@ def imagenet_loader(
 
     dataset = datasets.ImageFolder(dataset_dir, transform)
     if is_distributed:
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset=dataset,
+            num_replicas=num_replicas,
+            rank=rank)
         shuffle = False
 
     loader = torch.utils.data.DataLoader(

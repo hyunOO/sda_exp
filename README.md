@@ -8,7 +8,7 @@
 
   - Current ImageNet training uses warmup scheduler; Learning rate is increased from 0 to
 0.256 in the first 5 epochs. (https://arxiv.org/abs/1706.02677)
- - Various augmentation techniques.
+  - Various augmentation techniques.
 
 # Things to verify
 
@@ -21,11 +21,13 @@
   - How to use `DistributedSampler`
     <https://discuss.pytorch.org/t/distributedsampler-for-validation-set-in-imagenet-example/35273>
     <https://pytorch.org/docs/stable/data.html?highlight=distributedsampler#torch.utils.data.distributed.DistributedSampler>
- - How to use `DistributedDataParallel`
+  - How to use `DistributedDataParallel`
     <https://yangkky.github.io/2019/07/08/distributed-pytorch-tutorial.html>
- - EfficientNet model code
+  - How to use `
+    <https://github.com/leo-mao/dist-mnist/blob/tensorflow-tutorial-amended/torch-dist/mnist-dist.py>
+  - EfficientNet model code
     <https://github.com/lukemelas/EfficientNet-PyTorch>
- - ImageNet training code
+  - ImageNet training code
     <https://github.com/pytorch/examples/tree/master/imagenet>
 
 # How to run
