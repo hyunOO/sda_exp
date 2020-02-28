@@ -16,10 +16,14 @@ from dataloader import imagenet_loader
 from utils import AverageMeter
 from utils import ProgressMeter
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser = argparse.ArgumentParser()
 parser.add_argument(
     '--data_dir', default='/mnt/home/20160022', type=str,
     help=('path to a dataset. ')
+)
+parser.add_argument(
+    '--model_saving_dir', default='/mnt/home/20160022/saved_models',
+    type=str, help=('path to a dataset. ')
 )
 parser.add_argument(
     '--seed', default=None, type=int,
@@ -51,7 +55,7 @@ parser.add_argument(
           'efficientnet-b0 to efficientnet-b9 are possible. ')
 )
 parser.add_argument(
-    '--lr', default=0.1, type=float,
+    '--lr', default=0.256, type=float,
     help=('initial learning rate. ')
 )
 parser.add_argument(
@@ -59,7 +63,7 @@ parser.add_argument(
     help=('momentum. ')
 )
 parser.add_argument(
-    '--weight_decay', default=1e-4, type=float,
+    '--weight_decay', default=1e-5, type=float,
     help=('weight decay. ')
 )
 parser.add_argument(
@@ -85,7 +89,10 @@ def main():
     ngpus_per_node = torch.cuda.device_count()
     if args.multiprocessing_distributed:
         print('You use multi GPUs in a single node. ')
-        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        mp.spawn(
+            main_worker,
+            nprocs=ngpus_per_node,
+            args=(ngpus_per_node, args))
     else:
         # If args.multiprocessing_distributed is False, we use single GPU
         assert args.gpu is not None
@@ -118,20 +125,14 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(gpu)
         model = model.cuda(gpu)
 
-    criterion = nn.CrossEntropyLoss().cuda(gpu)
-    optimizer = torch.optim.SGD(
-        params=model.parameters(),
-        lr=args.lr,
-        momentum=args.momentum,
-        weight_decay=args.weight_decay)
-
     train_loader, train_sampler = imagenet_loader(
             is_train=True,
             is_distributed=args.multiprocessing_distributed,
             dataset_dir=os.path.join(args.data_dir, 'train'),
             batch_size=args.batch_size,
             num_workers=args.workers)
-    print('ImageNet train data loading complete')
+    print('Complete loading training data, length: {}'
+        .format(len(train_loader)))
 
     val_loader, _ = imagenet_loader(
         is_train=False,
@@ -139,15 +140,36 @@ def main_worker(gpu, ngpus_per_node, args):
         dataset_dir=os.path.join(args.data_dir, 'val'),
         batch_size=args.batch_size,
         num_workers=args.workers)
-    print('ImageNet val data loading complete')
+    print('Complete loading validation data, length: {}'.
+        format(len(val_loader)))
+
+    criterion = nn.CrossEntropyLoss().cuda(gpu)
+    # Experiment settings from https://arxiv.org/pdf/1905.11946.pdf
+    optimizer = torch.optim.RMSprop(
+        params=model.parameters(),
+        lr=args.lr,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay)
+    # learning rate decays by 0.97 every 2.4 epochs
+    # TODO: Warm up learning rate https://arxiv.org/pdf/1706.02677.pdf
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer=optimizer,
+        step_size=len(train_loader) * 2.4,
+        gamma=0.97)
 
     for epoch in range(args.epochs):
-        print('Epoch: {} starts'.format(epoch + 1))
+        print('Starts epoch: {} '.format(epoch + 1))
         if args.multiprocessing_distributed:
             train_sampler.set_epoch(epoch)
 
-        adjust_learning_rate(args, optimizer, epoch)
-        train(train_loader, model, criterion, optimizer, epoch, gpu)
+        train(
+            train_loader=train_loader,
+            model=model,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=epoch,
+            gpu=gpu)
         acc1 = validate(val_loader, model, criterion, epoch, gpu)
 
         if best_acc1 < acc1:
@@ -160,14 +182,14 @@ def main_worker(gpu, ngpus_per_node, args):
                      'state_dict': model.state_dict(),
                      'best_acc1': best_acc1,
                      'optimizer': optimizer.state_dict()},
-                    filename='')
+                    filename=os.path.join(
+                        args.model_saving_dir, 'checkpoint.pth'))
 
         print('Epoch: {}, current acc: {}, best acc: {}'
             .format(epoch + 1, acc1, best_acc1))
 
 
-def train(train_loader, model, criterion, optimizer, epoch, gpu):
-    print('Len train_loader: ', len(train_loader))
+def train(train_loader, model, criterion, optimizer, scheduler, epoch, gpu):
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
@@ -175,7 +197,6 @@ def train(train_loader, model, criterion, optimizer, epoch, gpu):
     model.train()
 
     for i, (images, target) in enumerate(train_loader):
-        print('Batch index: ', i)
         images = images.cuda(gpu, non_blocking=True)
         target = target.cuda(gpu, non_blocking=True)
 
@@ -191,10 +212,13 @@ def train(train_loader, model, criterion, optimizer, epoch, gpu):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
 
-        print('batch: {}, acc1: {}'.format(i, acc1))
+        if i % 100 == 0:
+            print('Training epoch: {}, batch : {} / {}, acc@1: {top1.avg:.3f}'
+                .format(epoch + 1, i, len(train_loader), top1=top1))
 
-    print('Epoch: {} Training Acc@1 {top1.avg:.3f} Training Acc@5 {top5.avg:.3f}'
+    print('Ends training epoch: {}, acc@1: {top1.avg:.3f}, acc@5: {top5.avg:.3f}'
             .format(epoch + 1, top1=top1, top5=top5))
 
 
@@ -217,16 +241,10 @@ def validate(val_loader, model, criterion, epoch, gpu):
             top1.update(acc1[0], images.size(0))
             top5.update(acc5[0], images.size(0))
 
-        print('Epoch: {} Validation Acc@1 {top1.avg:.3f} Validation Acc@5 {top5.avg:.3f}'
+        print('Ends validating epoch: {}, acc@1: {top1.avg:.3f}, acc@5: {top5.avg:.3f}'
             .format(epoch + 1, top1=top1, top5=top5))
 
     return top1.avg
-
-
-def adjust_learning_rate(args, optimizer, epoch):
-    lr = args.lr * (0.1 ** (epoch // 30))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
 
 
 def accuracy(output, target, topk=(1,)):
