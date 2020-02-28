@@ -13,9 +13,6 @@ from networks.efficientnet import EfficientNet
 
 from dataloader import imagenet_loader
 
-from utils import AverageMeter
-from utils import ProgressMeter
-
 parser = argparse.ArgumentParser()
 parser.add_argument(
     '--data_dir', default='/mnt/home/20160022', type=str,
@@ -161,6 +158,7 @@ def main_worker(gpu, ngpus_per_node, args):
         gamma=0.97)
 
     best_acc1 = 0
+    best_acc5 = 0
     for epoch in range(args.epochs):
         print('Starts epoch: {} '.format(epoch + 1))
         if args.multiprocessing_distributed:
@@ -201,17 +199,20 @@ def main_worker(gpu, ngpus_per_node, args):
                 torch.save(state, os.path.join(
                     args.model_saving_dir, 'checkpoint.pth'))
 
-            print('Epoch: {}, current acc: {}, best acc: {}'
-                .format(epoch + 1, acc1, best_acc1))
+            if best_acc5 < acc5:
+                best_acc5 = acc5
+
+            print('Epoch: {}, current acc: {}, best acc1: {}, best_acc5: {}'
+                .format(epoch + 1, acc1, best_acc1, best_acc5))
 
 
 def train(
         args, train_loader, model, criterion,
         optimizer, scheduler, epoch, gpu,
         ngpus_per_node, sampler):
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    top1 = 0
+    top5 = 0
+    total = 0
 
     model.train()
 
@@ -223,12 +224,10 @@ def train(
         loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        print('acc1: ', acc1)
-        print('acc5: ', acc5)
 
-        losses.update(loss.item(), images.size(0))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
+        top1 += acc1
+        top5 += acc5
+        total += target.size(0)
 
         optimizer.zero_grad()
         loss.backward()
@@ -236,20 +235,21 @@ def train(
         scheduler.step()
 
         if i % 100 == 0:
-            print('Training epoch: {}, batch : {} / {}, target size: {}, acc@1: {top1.avg:.3f}'
+            top1_acc = float(acc1 / target.size(0))
+            print('Training epoch: {}, batch : {} / {}, target size: {}, batch top1 acc: {}'
                 .format(epoch + 1, i, len(train_loader),
-                        images.size(0), top1=top1))
+                        target.size(0), top1_acc))
 
     if args.multiprocessing_distributed:
-        top1_acc = metric_average(top1.avg / ngpus_per_node)
-        top5_acc = metric_average(top5.avg / ngpus_per_node)
+        top1_acc = float(metric_average(top1 / ngpus_per_node) / total)
+        top5_acc = float(metric_average(top5 / ngpus_per_node) / total)
         if gpu == 0:
             print('Ends training epoch: {}, top1 acc: {}, top5 acc: {}'
                 .format(epoch + 1, top1_acc, top5_acc))
 
     if not args.multiprocessing_distributed:
-        top1_acc = top1.avg
-        top5_acc = top5.avg
+        top1_acc = float(top1 / total)
+        top5_acc = float(top5 / total)
 
         print('Ends training epoch: {}, top1 acc: {}, top5 acc: {}'
               .format(epoch + 1, top1_acc, top5_acc))
@@ -260,11 +260,9 @@ def train(
 def validate(
         args, val_loader, model, criterion,
         epoch, gpu, ngpus_per_node, sampler):
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    top1_acc = None
-    top5_acc = None
+    top1 = 0
+    top5 = 0
+    total = 0
 
     model.eval()
 
@@ -276,20 +274,20 @@ def validate(
             loss = criterion(output, target)
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
+            top1 += acc1
+            top5 += acc5
+            total += target.size(0)
 
         if args.multiprocessing_distributed:
-            top1_acc = metric_average(top1.avg / ngpus_per_node)
-            top5_acc = metric_average(top5.avg / ngpus_per_node)
+            top1_acc = float(metric_average(top1 / ngpus_per_node) / total)
+            top5_acc = float(metric_average(top5 / ngpus_per_node) / total)
             if gpu == 0:
                 print('Ends validating epoch: {}, top1 acc: {}, top5 acc: {}'
                     .format(epoch + 1, top1_acc, top5_acc))
 
         if not args.multiprocessing_distributed:
-            top1_acc = top1.avg
-            top5_acc = top5.avg
+            top1_acc = float(top1 / total)
+            top5_acc = float(top5 / total)
 
             print('Ends validating epoch: {}, top1 acc: {}, top5 acc: {}'
                   .format(epoch + 1, top1_acc, top5_acc))
@@ -300,7 +298,6 @@ def validate(
 def accuracy(output, target, topk=(1,)):
     with torch.no_grad():
         maxk = max(topk)
-        batch_size = target.size(0)
 
         _, pred = output.topk(maxk, 1, True, True)
         pred = pred.t()
@@ -309,7 +306,7 @@ def accuracy(output, target, topk=(1,)):
         res = []
         for k in topk:
             correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
+            res.append(correct_k)
         return res
 
 
