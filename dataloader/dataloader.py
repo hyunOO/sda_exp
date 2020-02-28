@@ -50,4 +50,3 @@ def imagenet_loader(
         sampler=sampler)
 
     return loader, sampler
-
