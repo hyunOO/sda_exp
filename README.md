@@ -36,5 +36,6 @@
 
 ```sh
 $ python3 main.py
+$ python3 main.py --multiprocessing_distributed # to use multi-GPUs
 ```
 

@@ -43,8 +43,8 @@ parser.add_argument(
     help=('GPU id to use. ')
 )
 parser.add_argument(
-    '--multiprocessing_distributed', default=True, type=bool,
-    help=('Use multi-processing distributed training to launch. ')
+    '--multiprocessing_distributed', action='store_true',
+    help='Use multi-processing distributed training to launch. '
 )
 parser.add_argument(
     '--model_type', default='efficientnet-b0', type=str,
