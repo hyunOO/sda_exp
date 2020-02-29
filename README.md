@@ -15,6 +15,7 @@
   - Do we need `average_gradients` before `optimizer.step()`? \
    <https://github.com/pytorch/examples/issues/659> \
    <https://github.com/leo-mao/dist-mnist/blob/tensorflow-tutorial-amended/torch-dist/mnist-dist.py>
+   <https://discuss.pytorch.org/t/is-average-the-correct-way-for-the-gradient-in-distributeddataparallel-with-multi-nodes/34260/6>
   - How many epochs do we have to train?
   - How large batch size do we have to set?
 

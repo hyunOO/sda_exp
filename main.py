@@ -115,6 +115,8 @@ def main_worker(gpu, ngpus_per_node, args):
         model.cuda(gpu)
         args.batch_size = int(args.batch_size / ngpus_per_node)
         args.workers = int(args.workers / ngpus_per_node)
+        # https://discuss.pytorch.org/t/is-average-the-correct-way-for-the-gradient-in-distributeddataparallel-with-multi-nodes/34260/6
+        args.lr = args.lr / ngpus_per_node
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[gpu])
     else:
