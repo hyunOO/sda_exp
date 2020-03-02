@@ -13,6 +13,8 @@ from networks.efficientnet import EfficientNet
 
 from dataloader import imagenet_loader
 
+from tensorboardX import SummaryWriter
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     '--data_dir', default='/mnt/home/20160022', type=str,
@@ -43,7 +45,11 @@ parser.add_argument(
     help=('GPU id to use. ')
 )
 parser.add_argument(
-    '--multiprocessing_distributed', action='store_true',
+    '--use_parallel', action='store_true',
+    help='Use DataParallel API. '
+)
+parser.add_argument(
+    '--use_distributed', action='store_true',
     help='Use multi-processing distributed training to launch. '
 )
 parser.add_argument(
@@ -60,7 +66,7 @@ parser.add_argument(
     help=('momentum. ')
 )
 parser.add_argument(
-    '--weight_decay', default=1e-5, type=float,
+    '--weight_decay', default=1e-4, type=float,
     help=('weight decay. ')
 )
 parser.add_argument(
@@ -68,7 +74,7 @@ parser.add_argument(
     help=('mini-batch size. ')
 )
 parser.add_argument(
-    '--epochs', default=200, type=int,
+    '--epochs', default=90, type=int,
     help=('Epochs to train. ')
 )
 
@@ -84,21 +90,24 @@ def main():
 
     # TODO: Handling distributed training with multiple nodes
     ngpus_per_node = torch.cuda.device_count()
-    if args.multiprocessing_distributed:
-        print('You use multi GPUs in a single node. ')
+    if args.use_distributed:
+        print('You use DistributedDataParallel API with multi-GPUs. ')
         mp.spawn(
             main_worker,
             nprocs=ngpus_per_node,
             args=(ngpus_per_node, args))
+    elif args.use_parallel:
+        print('You use DataParallel API with mulit-GPUs. ')
+        main_worker(args.gpu, ngpus_per_node, args)
     else:
-        # If args.multiprocessing_distributed is False, we use single GPU
+        # If args.use_distributed is False, we use single GPU
         assert args.gpu is not None
         print('You use single GPU. ')
         main_worker(args.gpu, ngpus_per_node, args)
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    if args.multiprocessing_distributed:
+    if args.use_distributed:
         print('Initializing to use multi GPUs. ')
         dist.init_process_group(
             backend=args.dist_backend,
@@ -110,7 +119,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print('Creating model: {}'.format(args.model_type))
         model = EfficientNet.from_name(args.model_type)
 
-    if args.multiprocessing_distributed:
+    if args.use_distributed:
         torch.cuda.set_device(gpu)
         model.cuda(gpu)
         args.batch_size = int(args.batch_size / ngpus_per_node)
@@ -119,13 +128,16 @@ def main_worker(gpu, ngpus_per_node, args):
         args.lr = args.lr / ngpus_per_node
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[gpu])
+    elif args.use_parallel:
+        model = nn.DataParallel(model)
+        model.cuda()
     else:
         torch.cuda.set_device(gpu)
         model = model.cuda(gpu)
 
     train_loader, train_sampler = imagenet_loader(
             is_train=True,
-            is_distributed=args.multiprocessing_distributed,
+            is_distributed=args.use_distributed,
             dataset_dir=os.path.join(args.data_dir, 'train'),
             batch_size=args.batch_size,
             num_workers=args.workers,
@@ -136,7 +148,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     val_loader, val_sampler = imagenet_loader(
         is_train=False,
-        is_distributed=args.multiprocessing_distributed,
+        is_distributed=args.use_distributed,
         dataset_dir=os.path.join(args.data_dir, 'val'),
         batch_size=args.batch_size,
         num_workers=args.workers,
@@ -145,28 +157,32 @@ def main_worker(gpu, ngpus_per_node, args):
     print('Complete loading validation data, length: {}'.
         format(len(val_loader)))
 
-    criterion = nn.CrossEntropyLoss().cuda(gpu)
-    # Experiment settings from https://arxiv.org/pdf/1905.11946.pdf
-    optimizer = torch.optim.RMSprop(
+    criterion = nn.CrossEntropyLoss()
+    # Experiment settings from https://arxiv.org/pdf/1608.06993.pdf Section 4.2
+    optimizer = torch.optim.SGD(
         params=model.parameters(),
         lr=args.lr,
         momentum=args.momentum,
-        weight_decay=args.weight_decay)
+        weight_decay=args.weight_decay,
+        nesterov=True)
     # learning rate decays by 0.97 every 2.4 epochs
     # TODO: Warm up learning rate https://arxiv.org/pdf/1706.02677.pdf
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer=optimizer,
-        step_size=len(train_loader) * 2.4,
-        gamma=0.97)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=[30, 60],
+        gamma=0.1)
 
     best_acc1 = 0
     best_acc5 = 0
+    writer = SummaryWriter(
+        log_dir=os.path.join(os.getcwd(), 'log', args.model_type))
+
     for epoch in range(args.epochs):
         print('Starts epoch: {} '.format(epoch + 1))
-        if args.multiprocessing_distributed:
+        if args.use_distributed:
             train_sampler.set_epoch(epoch)
 
-        train(
+        train_top1, train_top5 = train(
             args=args,
             train_loader=train_loader,
             model=model,
@@ -177,6 +193,9 @@ def main_worker(gpu, ngpus_per_node, args):
             gpu=gpu,
             ngpus_per_node=ngpus_per_node,
             sampler=train_sampler)
+        writer.add_scalar('top1_acc/train', train_top1, epoch)
+        writer.add_scalar('top5_acc/train', train_top5, epoch)
+
         acc1, acc5 = validate(
             args=args,
             val_loader=val_loader,
@@ -186,9 +205,11 @@ def main_worker(gpu, ngpus_per_node, args):
             gpu=gpu,
             ngpus_per_node=ngpus_per_node,
             sampler=val_sampler)
+        writer.add_scalar('top1_acc/val', acc1, epoch)
+        writer.add_scalar('top5_acc/val', acc5, epoch)
 
-        if not args.multiprocessing_distributed or \
-                (args.multiprocessing_distributed and gpu == 0):
+        if not args.use_distributed or \
+                (args.use_distributed and gpu == 0):
             if best_acc1 < acc1:
                 best_acc1 = acc1
                 state = {
@@ -242,14 +263,14 @@ def train(
                 .format(epoch + 1, i, len(train_loader),
                         target.size(0), top1_acc))
 
-    if args.multiprocessing_distributed:
+    if args.use_distributed:
         top1_acc = float(metric_average(top1 / ngpus_per_node) / total)
         top5_acc = float(metric_average(top5 / ngpus_per_node) / total)
         if gpu == 0:
             print('Ends training epoch: {}, top1 acc: {}, top5 acc: {}'
                 .format(epoch + 1, top1_acc, top5_acc))
 
-    if not args.multiprocessing_distributed:
+    if not args.use_distributed:
         top1_acc = float(top1 / total)
         top5_acc = float(top5 / total)
 
@@ -280,14 +301,14 @@ def validate(
             top5 += acc5
             total += target.size(0)
 
-        if args.multiprocessing_distributed:
+        if args.use_distributed:
             top1_acc = float(metric_average(top1 / ngpus_per_node) / total)
             top5_acc = float(metric_average(top5 / ngpus_per_node) / total)
             if gpu == 0:
                 print('Ends validating epoch: {}, top1 acc: {}, top5 acc: {}'
                     .format(epoch + 1, top1_acc, top5_acc))
 
-        if not args.multiprocessing_distributed:
+        if not args.use_distributed:
             top1_acc = float(top1 / total)
             top5_acc = float(top5 / total)
 
